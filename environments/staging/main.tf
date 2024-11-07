@@ -16,7 +16,7 @@ provider "aws" {
   profile = "dp-staging"
 }
 
-module "lambda_example" {
+module "lambda_email_function" {
   # source  = "terraform-aws-modules/lambda/aws"
   # version = "7.14.0"
   source = "git::https://github.com/terraform-aws-modules/terraform-aws-lambda.git?ref=00a71723bbefb191c3fb622b3e34c693a2ca4930"
