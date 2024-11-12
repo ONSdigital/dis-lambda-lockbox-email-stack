@@ -3,7 +3,7 @@ locals {
   env_name = "dp-staging"
   region   = "eu-west-2"
 
-  function_name = "lamdbda_email_function"
+  function_name = "lambda_email_function"
   tags = {
     Environment = local.env_name
     Repository  = "https://github.com/ONSdigital/dis-lambda-lockbox-email-stack"
@@ -26,14 +26,16 @@ module "lambda_email_function" {
   runtime       = "python3.12"
   publish       = true
 
+  role = aws_iam_role.lambda_exec_role.arn
+
   store_on_s3              = true
-  s3_bucket                = module.s3_bucket.s3_bucket_id
+  s3_bucket                = "ons-dp-staging-encrypted-datasets"
   s3_prefix                = "${local.function_name}/"
   artifacts_dir            = "${path.root}/.terraform/lambda-builds/"
   recreate_missing_package = false
 
   source_path = [
-    "${path.root}/../../src/lambda_function.py",
+    "${path.root}/../../src/lambda_email_function.py",
     {
       pip_requirements = "${path.root}/../../src/requirements.txt"
     }
@@ -49,12 +51,49 @@ module "lambda_email_function" {
   tags = local.tags
 }
 
+resource "aws_iam_role" "lambda_exec_role" {
+  name               = "${local.env_name}-lambda-ses-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Action = "sts:AssumeRole",
+        Effect = "Allow",
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_policy" "ses_send_email_policy" {
+  name        = "${local.env_name}-lambda-ses-policy"
+  description = "Policy to allow Lambda function to send emails using SES"
+  policy      = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = "ses:SendEmail",
+        Resource = "arn:aws:ses:eu-west-2:265651742338:identity/florence@dp-staging.aws.onsdigital.uk"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_ses_policy_attachment" {
+  role       = aws_iam_role.lambda_exec_role.name
+  policy_arn = aws_iam_policy.ses_send_email_policy.arn
+}
+
+
 module "s3_bucket" {
   # source  = "terraform-aws-modules/s3-bucket/aws"
   # version = "4.2.1"
   source = "git::https://github.com/terraform-aws-modules/terraform-aws-s3-bucket.git?ref=d8ad14f2da0179178030c8876de84458aa7495e9"
 
-  bucket        = "${local.env_name}-${local.function_name}"
+  bucket        = "dp-staging-${local.function_name}"
   force_destroy = true
 
   block_public_acls       = true
@@ -66,4 +105,16 @@ module "s3_bucket" {
     enabled = true
   }
   tags = local.tags
+}
+
+resource "aws_s3_bucket_notification" "lambda_trigger" {
+  bucket = "ons-dp-staging-encrypted-datasets"
+
+  lambda_function {
+    lambda_function_arn = module.lambda_email_function.lambda_function_arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "ts-datasets/"
+  }
+
+  depends_on = [module.lambda_email_function]
 }
